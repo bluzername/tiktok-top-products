@@ -1,0 +1,7 @@
+{
+  "functions": {
+    "api/products.ts": {
+      "maxDuration": 120
+    }
+  }
+}
