@@ -36,10 +36,16 @@ function normalizeProduct(raw: RawProduct, index: number): Product {
 }
 
 function getWeekDate(): string {
+  // TikTok requires a Sunday date for weekly data
+  // Get the most recent past Sunday (start of last complete week)
   const now = new Date();
-  const day = now.getDay();
-  const diff = now.getDate() - day - 7;
-  const lastSunday = new Date(now.getFullYear(), now.getMonth(), diff);
+  const dayOfWeek = now.getUTCDay(); // 0 = Sunday
+
+  // Go back to last Sunday, then back one more week to ensure data is available
+  const daysToLastSunday = dayOfWeek === 0 ? 7 : dayOfWeek;
+  const lastSunday = new Date(now);
+  lastSunday.setUTCDate(now.getUTCDate() - daysToLastSunday - 7);
+
   return lastSunday.toISOString().split('T')[0];
 }
 

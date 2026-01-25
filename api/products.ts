@@ -10,10 +10,16 @@ interface ApifyResponse {
 }
 
 function getWeekDate(): string {
+  // TikTok requires a Sunday date for weekly data
+  // Get the most recent past Sunday (start of last complete week)
   const now = new Date();
-  const day = now.getDay();
-  const diff = now.getDate() - day - 7;
-  const lastSunday = new Date(now.getFullYear(), now.getMonth(), diff);
+  const dayOfWeek = now.getUTCDay(); // 0 = Sunday
+
+  // Go back to last Sunday, then back one more week to ensure data is available
+  const daysToLastSunday = dayOfWeek === 0 ? 7 : dayOfWeek;
+  const lastSunday = new Date(now);
+  lastSunday.setUTCDate(now.getUTCDate() - daysToLastSunday - 7);
+
   return lastSunday.toISOString().split('T')[0];
 }
 
@@ -30,6 +36,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
 
   const thailandMode = req.query.thailand !== 'false';
+  const weekDate = getWeekDate();
 
   try {
     const response = await fetch(
@@ -45,7 +52,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           top_products_first_category: [],
           top_products_second_category: [],
           top_products_period_type: 'week',
-          top_products_date: getWeekDate(),
+          top_products_date: weekDate,
           top_products_order_field: 'ctr',
           top_products_order_type: 'desc',
           top_products_page: 1,
@@ -68,7 +75,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     // Check for TikTok API errors (code !== 0 or error message)
     if (result.msg && result.msg !== 'OK' && result.msg !== '') {
-      return res.status(502).json({ error: result.msg });
+      return res.status(502).json({ error: result.msg, date: weekDate });
     }
 
     if (!result.data) {
