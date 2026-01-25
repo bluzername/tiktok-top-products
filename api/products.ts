@@ -26,7 +26,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const cookies = process.env.TIKTOK_COOKIES;
 
   if (!token || !cookies) {
-    return res.status(500).json({ error: 'Server configuration error' });
+    return res.status(500).json({ error: 'Server configuration error: missing credentials' });
   }
 
   const thailandMode = req.query.thailand !== 'false';
@@ -55,19 +55,29 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     );
 
     if (!response.ok) {
-      throw new Error(`Apify API error: ${response.status}`);
+      const errorText = await response.text();
+      return res.status(502).json({ error: `Apify API error: ${response.status}`, details: errorText });
     }
 
     const data: ApifyResponse[] = await response.json();
     const result = data[0];
 
-    if (!result?.data) {
-      return res.status(502).json({ error: result?.msg || 'Empty response from API' });
+    if (!result) {
+      return res.status(502).json({ error: 'Empty response array from Apify' });
+    }
+
+    // Check for TikTok API errors (code !== 0 or error message)
+    if (result.msg && result.msg !== 'OK' && result.msg !== '') {
+      return res.status(502).json({ error: result.msg });
+    }
+
+    if (!result.data) {
+      return res.status(502).json({ error: 'No data in response', msg: result.msg, code: result.code });
     }
 
     return res.status(200).json(result.data);
   } catch (error) {
     console.error('API error:', error);
-    return res.status(500).json({ error: 'Failed to fetch products' });
+    return res.status(500).json({ error: 'Failed to fetch products', details: String(error) });
   }
 }
