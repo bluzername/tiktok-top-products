@@ -7,6 +7,8 @@ import { sortProducts } from '@/utils/sorting';
 
 export function useProducts() {
   const [products, setProducts] = useState<Product[]>([]);
+  const [fetchedAt, setFetchedAt] = useState<string | null>(null);
+  const [weekDate, setWeekDate] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [selectedCategory, setSelectedCategory] = useState<string>(ALL_CATEGORIES_ID);
@@ -20,12 +22,16 @@ export function useProducts() {
     setLoading(true);
     setError(null);
     try {
-      const data = await fetchProducts(thailandMode);
-      setProducts(data);
+      const payload = await fetchProducts(thailandMode);
+      setProducts(payload.products);
+      setFetchedAt(payload.fetchedAt);
+      setWeekDate(payload.weekDate);
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to fetch products';
       setError(message);
       setProducts([]);
+      setFetchedAt(null);
+      setWeekDate(null);
     } finally {
       setLoading(false);
     }
@@ -61,6 +67,8 @@ export function useProducts() {
 
   return {
     products: sortedProducts,
+    fetchedAt,
+    weekDate,
     loading,
     error,
     categories,

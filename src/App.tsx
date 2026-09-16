@@ -7,6 +7,8 @@ import { Card, CardContent } from '@/components/ui/card';
 function App() {
   const {
     products,
+    fetchedAt,
+    weekDate,
     loading,
     error,
     categories,
@@ -32,6 +34,8 @@ function App() {
           onThailandModeChange={setThailandMode}
           onRefresh={refresh}
           loading={loading}
+          fetchedAt={fetchedAt}
+          weekDate={weekDate}
         />
         <main className="flex-1 overflow-auto p-6">
           <Card>
