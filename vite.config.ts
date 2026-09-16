@@ -7,11 +7,11 @@ export default defineConfig({
   plugins: [react(), tailwindcss()],
   resolve: {
     alias: {
-      '@': path.resolve(__dirname, './src'),
+      '@': path.resolve(import.meta.dirname, './src'),
     },
   },
   test: {
     environment: 'node',
-    include: ['src/**/*.test.ts', 'shared/**/*.test.ts', 'api/**/*.test.ts'],
+    include: ['src/**/*.test.ts', 'shared/**/*.test.ts', 'api/**/*.test.ts', 'tests/**/*.test.ts'],
   },
 })
