@@ -2,6 +2,15 @@
   "functions": {
     "api/products.ts": {
       "maxDuration": 120
+    },
+    "api/refresh.ts": {
+      "maxDuration": 300
     }
-  }
+  },
+  "crons": [
+    {
+      "path": "/api/refresh",
+      "schedule": "0 6 * * 1"
+    }
+  ]
 }
