@@ -1,109 +1,70 @@
 import axios from 'axios';
-import type { RawProduct, Product } from '@/types/product';
-import { calculateManufacturingScore } from '@/utils/calculations';
+import type { ProductsPayload } from '@/types/product';
+import {
+  buildApifyRequestBody,
+  buildApifyRunSyncUrl,
+  extractProductList,
+  DEFAULT_APIFY_ACTOR_ID,
+  type ApifyActorResult,
+} from '../../shared/apify-request';
+import { normalizeProducts } from '../../shared/normalize-product';
+import { getWeekDate } from '../../shared/week-date';
+import { regionFor } from '../../shared/types';
 
-const APIFY_BASE_URL = 'https://api.apify.com/v2/acts/doliz~tiktok-creative-center-scraper/run-sync-get-dataset-items';
+const APIFY_TIMEOUT_MS = 120_000;
 
-interface ApiResponse {
-  list?: RawProduct[];
-  pagination?: { page: number; size: number; total: number; has_more: boolean };
+interface ApiErrorBody {
+  error?: string;
+  hint?: string;
+  details?: string;
 }
 
-function normalizeProduct(raw: RawProduct, index: number): Product {
-  const name = raw.url_title || raw.product_name || raw.name || `Product ${index + 1}`;
-  const image = raw.cover_url || raw.image_url || raw.image || '';
-  const ctr = raw.ctr ?? 0;
-  const cvr = raw.cvr ?? 0;
-  const cpa = raw.cpa ?? 0;
-  const popularityChange = raw.post_change ?? raw.popularity_change ?? 0;
-  const category = raw.third_ecom_category?.value || 'Unknown';
-  const firstCategory = raw.first_ecom_category?.value || 'Unknown';
-  const firstCategoryId = raw.first_ecom_category?.id || '';
+function describeApiError(error: unknown): string {
+  if (axios.isAxiosError<ApiErrorBody>(error) && error.response?.data?.error) {
+    const { error: message, hint } = error.response.data;
+    return hint ? `${message}. ${hint}` : message;
+  }
+  return error instanceof Error ? error.message : 'Failed to fetch products';
+}
+
+/** Production path: the Vercel function serves the cached weekly snapshot. Never hits Apify from the browser. */
+async function fetchViaServerless(thailandMode: boolean): Promise<ProductsPayload> {
+  try {
+    const response = await axios.get<ProductsPayload>('/api/products', {
+      params: { thailand: thailandMode },
+      timeout: APIFY_TIMEOUT_MS,
+    });
+    return response.data;
+  } catch (error) {
+    throw new Error(describeApiError(error));
+  }
+}
+
+/** Local-only path: calls Apify directly with VITE_APIFY_TOKEN. Each call is a paid actor run. */
+async function fetchViaApifyDirect(thailandMode: boolean): Promise<ProductsPayload> {
+  const token = import.meta.env.VITE_APIFY_TOKEN;
+  const cookies = import.meta.env.VITE_TIKTOK_COOKIES;
+  if (!token || !cookies) {
+    throw new Error('Set VITE_APIFY_TOKEN and VITE_TIKTOK_COOKIES in .env for direct mode');
+  }
+
+  const weekDate = getWeekDate();
+  const actorId = import.meta.env.VITE_APIFY_ACTOR_ID || DEFAULT_APIFY_ACTOR_ID;
+  const response = await axios.post<ApifyActorResult[]>(
+    buildApifyRunSyncUrl(actorId, token),
+    buildApifyRequestBody({ cookies, thailandMode, weekDate }),
+    { timeout: APIFY_TIMEOUT_MS }
+  );
 
   return {
-    id: `product-${index}`,
-    name: name.replace(/-/g, ' '),
-    image,
-    category,
-    firstCategory,
-    firstCategoryId,
-    ctr,
-    cvr,
-    cpa,
-    popularityChange,
-    manufacturingScore: calculateManufacturingScore(ctr, cvr, cpa),
+    products: normalizeProducts(extractProductList(response.data)),
+    region: regionFor(thailandMode),
+    weekDate,
+    fetchedAt: new Date().toISOString(),
   };
 }
 
-function getWeekDate(): string {
-  // TikTok requires a Sunday date for weekly data
-  // Get the most recent past Sunday (start of last complete week)
-  const now = new Date();
-  const dayOfWeek = now.getUTCDay(); // 0 = Sunday
-
-  // Go back to last Sunday, then back one more week to ensure data is available
-  const daysToLastSunday = dayOfWeek === 0 ? 7 : dayOfWeek;
-  const lastSunday = new Date(now);
-  lastSunday.setUTCDate(now.getUTCDate() - daysToLastSunday - 7);
-
-  return lastSunday.toISOString().split('T')[0];
-}
-
-async function fetchViaServerless(thailandMode: boolean): Promise<ApiResponse> {
-  const response = await axios.get<ApiResponse>('/api/products', {
-    params: { thailand: thailandMode },
-    timeout: 120000,
-  });
-  return response.data;
-}
-
-async function fetchViaApifyDirect(thailandMode: boolean): Promise<ApiResponse> {
-  const token = import.meta.env.VITE_APIFY_TOKEN;
-  const cookies = import.meta.env.VITE_TIKTOK_COOKIES;
-
-  if (!token || !cookies) {
-    throw new Error('API credentials not configured');
-  }
-
-  interface ApifyResponse {
-    code: number;
-    msg: string;
-    data: ApiResponse | null;
-  }
-
-  const response = await axios.post<ApifyResponse[]>(
-    `${APIFY_BASE_URL}?token=${token}`,
-    {
-      target: 'top_products',
-      cookies,
-      top_products_country: thailandMode ? 'TH' : '',
-      top_products_level: 'l3',
-      top_products_first_category: [],
-      top_products_second_category: [],
-      top_products_period_type: 'week',
-      top_products_date: getWeekDate(),
-      top_products_order_field: 'ctr',
-      top_products_order_type: 'desc',
-      top_products_page: 1,
-      top_products_limit: 20,
-    },
-    { timeout: 120000 }
-  );
-
-  const result = response.data[0];
-  if (!result?.data) {
-    throw new Error(result?.msg || 'API returned an error');
-  }
-  return result.data;
-}
-
-export async function fetchProducts(thailandMode: boolean): Promise<Product[]> {
+export async function fetchProducts(thailandMode: boolean): Promise<ProductsPayload> {
   const useServerless = import.meta.env.PROD || !import.meta.env.VITE_APIFY_TOKEN;
-
-  const data = useServerless
-    ? await fetchViaServerless(thailandMode)
-    : await fetchViaApifyDirect(thailandMode);
-
-  const items = data.list || [];
-  return items.map((raw, index) => normalizeProduct(raw, index));
+  return useServerless ? fetchViaServerless(thailandMode) : fetchViaApifyDirect(thailandMode);
 }

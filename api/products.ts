@@ -1,90 +1,68 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
+import { cacheKeyFor, type ProductsPayload } from '../shared/types.js';
+import { fetchTopProducts } from './_lib/apify.js';
+import { isAuthorizedCron } from './_lib/auth.js';
+import { cacheBackendName, readCache, writeCache } from './_lib/cache.js';
+import { ConfigError, getApifyConfig, getCronSecret } from './_lib/env.js';
+import { CACHE_HIT_HEADER, NO_STORE_HEADER, errorMessage, sendError } from './_lib/http.js';
 
-interface ApifyResponse {
-  code: number;
-  msg: string;
-  data: {
-    list?: unknown[];
-    pagination?: { page: number; size: number; total: number; has_more: boolean };
-  } | null;
+const APIFY_FAILURE_HINT =
+  'No cached data exists yet and the live Apify fetch failed. Check APIFY_TOKEN, refresh TIKTOK_COOKIES, then call /api/refresh with the cron secret.';
+
+function resolveForceRefresh(req: VercelRequest): { force: boolean; unauthorized: boolean } {
+  if (req.query.force !== '1') return { force: false, unauthorized: false };
+  const authorized = isAuthorizedCron(req, getCronSecret());
+  return { force: authorized, unauthorized: !authorized };
 }
 
-function getWeekDate(): string {
-  // TikTok requires a Sunday date for weekly data
-  // Get the most recent past Sunday (start of last complete week)
-  const now = new Date();
-  const dayOfWeek = now.getUTCDay(); // 0 = Sunday
-
-  // Go back to last Sunday, then back one more week to ensure data is available
-  const daysToLastSunday = dayOfWeek === 0 ? 7 : dayOfWeek;
-  const lastSunday = new Date(now);
-  lastSunday.setUTCDate(now.getUTCDate() - daysToLastSunday - 7);
-
-  return lastSunday.toISOString().split('T')[0];
+function sendPayload(res: VercelResponse, payload: ProductsPayload, cacheStatus: 'HIT' | 'MISS'): VercelResponse {
+  res.setHeader('Cache-Control', cacheStatus === 'HIT' ? CACHE_HIT_HEADER : NO_STORE_HEADER);
+  res.setHeader('X-Cache', cacheStatus);
+  res.setHeader('X-Cache-Backend', cacheBackendName());
+  return res.status(200).json(payload);
 }
 
-export default async function handler(req: VercelRequest, res: VercelResponse) {
+async function fetchLiveAndCache(key: string, thailandMode: boolean): Promise<ProductsPayload> {
+  const payload = await fetchTopProducts(getApifyConfig(), thailandMode);
+  try {
+    await writeCache(key, payload);
+  } catch (error) {
+    console.error(`Cache write failed for ${key}: ${errorMessage(error)}`);
+  }
+  return payload;
+}
+
+export default async function handler(req: VercelRequest, res: VercelResponse): Promise<VercelResponse> {
   if (req.method !== 'GET') {
-    return res.status(405).json({ error: 'Method not allowed' });
+    return sendError(res, 405, { error: 'Method not allowed' });
   }
 
-  const token = process.env.APIFY_TOKEN;
-  const cookies = process.env.TIKTOK_COOKIES;
-
-  if (!token || !cookies) {
-    return res.status(500).json({ error: 'Server configuration error: missing credentials' });
+  const { force, unauthorized } = resolveForceRefresh(req);
+  if (unauthorized) {
+    return sendError(res, 401, { error: 'force=1 requires Authorization: Bearer <CRON_SECRET>' });
   }
 
   const thailandMode = req.query.thailand !== 'false';
-  const weekDate = getWeekDate();
+  const key = cacheKeyFor(thailandMode);
+
+  if (!force) {
+    try {
+      const cached = await readCache<ProductsPayload>(key);
+      if (cached) return sendPayload(res, cached, 'HIT');
+    } catch (error) {
+      console.error(`Cache read failed for ${key}: ${errorMessage(error)}`);
+    }
+  }
 
   try {
-    const response = await fetch(
-      `https://api.apify.com/v2/acts/doliz~tiktok-creative-center-scraper/run-sync-get-dataset-items?token=${token}`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          target: 'top_products',
-          cookies,
-          top_products_country: thailandMode ? 'TH' : '',
-          top_products_level: 'l3',
-          top_products_first_category: [],
-          top_products_second_category: [],
-          top_products_period_type: 'week',
-          top_products_date: weekDate,
-          top_products_order_field: 'ctr',
-          top_products_order_type: 'desc',
-          top_products_page: 1,
-          top_products_limit: 20,
-        }),
-      }
-    );
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      return res.status(502).json({ error: `Apify API error: ${response.status}`, details: errorText });
-    }
-
-    const data: ApifyResponse[] = await response.json();
-    const result = data[0];
-
-    if (!result) {
-      return res.status(502).json({ error: 'Empty response array from Apify' });
-    }
-
-    // Check for TikTok API errors (code !== 0 or error message)
-    if (result.msg && result.msg !== 'OK' && result.msg !== '') {
-      return res.status(502).json({ error: result.msg, date: weekDate });
-    }
-
-    if (!result.data) {
-      return res.status(502).json({ error: 'No data in response', msg: result.msg, code: result.code });
-    }
-
-    return res.status(200).json(result.data);
+    const payload = await fetchLiveAndCache(key, thailandMode);
+    return sendPayload(res, payload, 'MISS');
   } catch (error) {
-    console.error('API error:', error);
-    return res.status(500).json({ error: 'Failed to fetch products', details: String(error) });
+    const message = errorMessage(error);
+    console.error(`Live fetch failed for ${key}: ${message}`);
+    if (error instanceof ConfigError) {
+      return sendError(res, 500, { error: 'Server configuration error', details: message });
+    }
+    return sendError(res, 502, { error: 'Failed to fetch products', hint: APIFY_FAILURE_HINT, details: message });
   }
 }

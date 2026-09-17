@@ -5,35 +5,51 @@ import { ALL_CATEGORIES_ID } from '@/constants/categories';
 import { fetchProducts } from '@/api/apify';
 import { sortProducts } from '@/utils/sorting';
 
+interface LoadedState {
+  requestKey: string;
+  products: Product[];
+  fetchedAt: string | null;
+  weekDate: string | null;
+  error: string | null;
+}
+
+const EMPTY: Omit<LoadedState, 'requestKey'> = { products: [], fetchedAt: null, weekDate: null, error: null };
+
+async function load(thailandMode: boolean, requestKey: string): Promise<LoadedState> {
+  try {
+    const payload = await fetchProducts(thailandMode);
+    return { requestKey, products: payload.products, fetchedAt: payload.fetchedAt, weekDate: payload.weekDate, error: null };
+  } catch (err) {
+    const error = err instanceof Error ? err.message : 'Failed to fetch products';
+    return { ...EMPTY, requestKey, error };
+  }
+}
+
 export function useProducts() {
-  const [products, setProducts] = useState<Product[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const [selectedCategory, setSelectedCategory] = useState<string>(ALL_CATEGORIES_ID);
   const [thailandMode, setThailandMode] = useState(true);
+  const [requestId, setRequestId] = useState(0);
+  const [loaded, setLoaded] = useState<LoadedState | null>(null);
   const [sort, setSort] = useState<SortState>({
     field: 'manufacturingScore',
     direction: 'desc',
   });
 
-  const loadProducts = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const data = await fetchProducts(thailandMode);
-      setProducts(data);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'Failed to fetch products';
-      setError(message);
-      setProducts([]);
-    } finally {
-      setLoading(false);
-    }
-  }, [thailandMode]);
+  // Loading is derived: the current request key differs from the last completed one.
+  const requestKey = `${thailandMode ? 'th' : 'global'}:${requestId}`;
+  const loading = loaded?.requestKey !== requestKey;
 
   useEffect(() => {
-    loadProducts();
-  }, [loadProducts]);
+    let cancelled = false;
+    load(thailandMode, requestKey).then(next => {
+      if (!cancelled) setLoaded(next);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [thailandMode, requestKey]);
+
+  const refresh = useCallback(() => setRequestId(id => id + 1), []);
 
   const handleSort = useCallback((field: SortState['field']) => {
     setSort(prev => ({
@@ -41,6 +57,8 @@ export function useProducts() {
       direction: prev.field === field && prev.direction === 'desc' ? 'asc' : 'desc',
     }));
   }, []);
+
+  const products = loaded?.products ?? EMPTY.products;
 
   const categories: Category[] = useMemo(() => {
     const catMap = new Map<string, string>();
@@ -61,8 +79,10 @@ export function useProducts() {
 
   return {
     products: sortedProducts,
+    fetchedAt: loaded?.fetchedAt ?? null,
+    weekDate: loaded?.weekDate ?? null,
     loading,
-    error,
+    error: loaded?.error ?? null,
     categories,
     selectedCategory,
     setSelectedCategory,
@@ -70,6 +90,6 @@ export function useProducts() {
     setThailandMode,
     sort,
     handleSort,
-    refresh: loadProducts,
+    refresh,
   };
 }
