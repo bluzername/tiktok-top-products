@@ -29,7 +29,7 @@
     "@types/node": "^26.6.6",
     "@types/react": "^19.2.5",
     "@types/react-dom": "^19.2.3",
-    "@vercel/node": "^29.0.1",
+    "@vercel/node": "^31.0.0",
     "@vitejs/plugin-react": "^6.3.0",
     "eslint": "^10.15.0",
     "eslint-plugin-react-hooks": "^7.0.1",
